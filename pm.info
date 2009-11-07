@@ -1,0 +1,5 @@
+; $Id$
+name = "Prediction Market"
+description = "Implementation of a prediction market with market maker"
+package = "Prediction Market"
+core = 6.x

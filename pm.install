@@ -1,0 +1,102 @@
+<?php
+
+function pm_schema()
+{
+  $schema = array();
+  
+  $schema['pm_market'] = array(
+    'description' => t('Table for prediction markets'),
+    'fields' => array(
+      'nid' => array(
+        'description' => t('ID of the associated node'),
+        'type' => 'int',
+        'unsigned' => true,
+        'not null' => true),
+      'status' => array(
+        'description' => t('Status of the market'),
+        'type' => 'int',
+        'unsigned' => true,
+        'not null' => true,
+        'default' => 0),
+      'expires' => array(
+        'description' => t('Date on which the market expires'),
+        'type' => 'int',
+        'unsigned' => true,
+        'not null' => true,
+        'default' => 0
+      )
+    )
+  );
+  
+  $schema['pm_contract'] = array(
+    'description' => t('Table for prediction market contracts'),
+    'fields' => array(
+      'cid' => array(
+        'description' => t('Unique identifier for the contract'),
+        'type' => 'serial',
+        'unsigned' => true,
+        'not null' => true),
+      'nid' => array(
+        'description' => t('ID of the associated market node'),
+        'type' => 'int',
+        'unsigned' => true,
+        'not null' => true),
+      'quantity' => array(
+        'description' => t('Quantity of contracts outstanding'),
+        'type' => 'int',
+        'unsigned' => false,
+        'not null' => true,
+        'default' => 0),
+      'price' => array(
+        'description' => t('The current price of the contract'),
+        'type' => 'float',
+        'unsigned' => true,
+        'not null' => true
+      )
+    ),
+    'primary key' => array('cid')
+  );
+  
+  $schema['pm_portfolio'] = array(
+    'description' => t('Portfolio of contracts owned by a user'),
+    'fields' => array(
+      'uid' => array(
+        'description' => t('ID of the user'),
+        'type' => 'int',
+        'unsigned' => true,
+        'not null' => true),
+      'cid' => array(
+        'description' => t('ID of the contract'),
+        'type' => 'int',
+        'unsigned' => true,
+        'not null' => true),
+      'quantity' => array(
+        'description' => t('The quantity of contracts owned'),
+        'type' => 'int',
+        'unsigned' => true,
+        'not null' => true)
+    ),
+    'primary key' => array('uid', 'cid')
+  );
+  
+  $schema['pm_account'] = array(
+    'description' => t('Account information for users'),
+    'fields' => array(
+      'uid' => array(
+        'description' => t('ID of the user'),
+        'type' => 'int',
+        'unsigned' => true,
+        'not null' => true),
+      'balance' => array(
+        'description' => t('The user\'s account balance'),
+        'type' => 'numeric',
+        'precision' => 20,
+        'scale' => 2,
+        'default' => 0,
+        'not null' => true)
+    ),
+    'primary key' => array('uid')
+  );
+  
+  return $schema;
+}
