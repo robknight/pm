@@ -1,2 +1,359 @@
 <?php
 
+/**
+ * @return array An array of permissions
+ */
+function pm_perm()
+{
+  return array('create markets', 'edit markets', 'delete markets', 'edit own markets', 'delete own markets',
+               'resolve markets', 'resolve own markets');
+}
+
+/**
+ * @return array Information about the node type(s) supported by this module
+ */
+function pm_node_info()
+{
+  return array(
+    'pm_market' => array(
+      'name' => t('prediction market'),
+      'module' => 'pm',
+      'description' => t('Create a market for making predictions on a subject')
+    )
+  );
+}
+
+function pm_theme()
+{
+  return array(
+    'pm_contract_list' => array(
+      'arguments' => array('form' => NULL),
+    ),
+    'pm_contracts' => array(
+      'arguments' => array('contracts' => NULL)
+    )
+  );
+}
+
+function pm_access($op, $node, $account)
+{
+  switch ($op) {
+    case 'view':
+      return true;
+    case 'create':
+      return user_access('create markets');
+    case 'update':
+      if (($account->uid == $node->uid) && user_access('edit own markets', $account)) {
+        return true;
+      } else {
+        return user_access('edit markets');
+      }
+    case 'delete':
+      if (($account->uid == $node->uid) && user_access('delete own markets', $account)) {
+        return true;
+      } else {
+        return user_access('delete markets');
+      }
+  }
+  return false;
+}
+
+function pm_form(&$node, $form_state) {
+  $type = node_get_types('type', $node);
+
+  if ($type->has_title) {
+    $form['title'] = array(
+      '#type' => 'textfield',
+      '#title' => check_plain($type->title_label),
+      '#required' => TRUE,
+      '#default_value' => $node->title,
+      '#weight' => -5,
+    );
+  }
+
+  if ($type->has_body) {
+    $form['body_field'] = node_body_field($node, $type->body_label, $type->min_word_count);
+  }
+  
+  $form['pm_status'] = array(
+    '#type' => 'select',
+    '#title' => t('Market status'),
+    '#default_value' => isset($node->pm_status) ? $node->pm_status : 0,
+    '#options' => array(t('Closed'), t('Open')),
+    '#weight' => 4,
+  );
+  
+  $form['pm_contracts_wrapper'] = array(
+    //'#type' => 'fieldset',
+    //'#title' => t('Contracts'),
+    '#weight' => 5,
+    //'#collapsible' => TRUE,
+  //  '#collapsed' => FALSE,
+    '#tree' => false
+  );
+  
+  $form['pm_contracts_wrapper']['pm_contracts'] = array(
+    '#prefix' => '<div id="contract-list">',
+    '#suffix' => '</div>',
+    '#tree' => true,
+    '#theme' => 'pm_contract_list',
+    '#type' => 'fieldset',
+    '#title' => t('Contracts')
+  );
+  
+  if (isset($form_state['new_contract'])) {
+    if (!isset($node->pm_contracts)) {
+      $node->pm_contracts = array();
+    }
+    $node->pm_contracts = array_merge($node->pm_contracts, array($form_state['new_contract']));
+  }
+  
+  //$form['pm_contracts_wrapper']['pm_contracts']['#suffix'] = dpr($node->pm_contracts, true);
+  
+  $i = 1;
+  foreach ($node->pm_contracts as $c) {
+    $form['pm_contracts_wrapper']['pm_contracts'][$i] = array();
+    $form['pm_contracts_wrapper']['pm_contracts'][$i]['title'] = array(
+      '#type' => 'textfield',
+      '#title' => $i,
+      '#default_value' => $c['title']
+    );
+    $form['pm_contracts_wrapper']['pm_contracts'][$i]['cid'] = array(
+      '#type' => 'hidden',
+      '#value' => $c['cid']
+    );
+    $i++;
+  }
+  
+  $form['pm_contracts_wrapper']['pm_new_contract'] = array(
+    '#type' => 'textfield',
+    '#title' => t('New contract'),
+  );
+  
+  $nid_url_component = $node->nid ? $node->nid . '/' : '';
+  
+  $form['pm_contracts_wrapper']['pm_add_contract'] = array(
+    '#type' => 'submit',
+    '#value' => t('Add Contract'),
+    '#submit' => array('pm_add_contract_submit'),
+    '#ahah' => array(
+      'path' => 'pm/' . $nid_url_component . 'add-contract',
+      'method' => 'replace',
+      'effect' => 'fade',
+      'wrapper' => 'contract-list'
+    )
+  );
+
+  return $form;
+}
+
+function pm_insert($node)
+{
+  db_query("INSERT INTO {pm_market} (nid, status) VALUES (%d, %d)", $node->nid, $node->pm_status);
+  $nid = db_last_insert_id();
+  
+  _pm_calculate_prices($node->pm_contracts);
+  
+  foreach ($node->pm_contracts as $c) {
+    _pm_save_contract($nid, $c);
+  }
+}
+
+function pm_update($node)
+{
+  db_query("UPDATE {pm_market} SET status = %d WHERE nid = %d", $node->pm_status, $node->nid);
+  
+  _pm_calculate_prices($node->pm_contracts);
+  
+  foreach ($node->pm_contracts as $c) {
+    _pm_save_contract($node->nid, $c);
+  }
+}
+
+function _pm_save_contract($nid, $contract)
+{
+  if ($contract['cid'] == 0) {
+    db_query("INSERT INTO {pm_contract} (nid, title, quantity, price) VALUES (%d, '%s', 0, 0)", $nid, $contract['title']);
+  } else {
+    db_query("UPDATE {pm_contract} SET title = '%s', quantity = %d, price = %d WHERE cid = %d",
+             $contract['title'], $contract['quantity'], $contract['price'], $contract['cid']);
+  }
+}
+
+function _pm_calculate_prices(&$contracts)
+{
+
+}
+
+function pm_delete($node)
+{
+  db_query("DELETE FROM {pm_contract} WHERE nid = %d", $node->nid);
+  db_query("DELETE FROM {pm_market} WHERE nid = %d", $node->nid);
+}
+
+function pm_validate(&$node)
+{
+  if (!in_array($node->pm_status, array(0, 1, 2))) {
+    form_set_error('pm_status', t('Invalid market status'));
+  }
+}
+
+function pm_load($node)
+{
+  $ret = db_fetch_object(db_query("SELECT status AS pm_status FROM {pm_market} WHERE nid = '%d'", $node->nid));
+  $ret->pm_contracts = array();
+  
+  $q = db_query("SELECT cid, quantity, price, title FROM {pm_contract} WHERE nid = %d", $node->nid);
+  while ($r = db_fetch_array($q)) {
+    $ret->pm_contracts[] = $r;
+  }
+  
+  return $ret;
+}
+
+function pm_menu()
+{
+  $items['pm/%/add-contract'] = array(
+    'page callback' => '_pm_add_contract',
+    'access callback' => '_pm_node_access',
+    'access arguments' => array(1),
+    'type' => MENU_CALLBACK,
+  );
+  
+  $items['pm/buy/%'] = array(
+    'page callback' => '_pm_buy',
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK
+  );
+  
+  $items['pm/sell/%'] = array(
+    'page callback' => '_pm_sell',
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK
+  );
+
+  return $items;
+}
+
+function pm_view($node, $teaser = false, $page = false)
+{
+  $node = node_prepare($node, $teaser);
+  
+  $node->content['pm_contracts'] = array(
+    '#value' => theme('pm_contracts', $node->pm_contracts),
+    '#weight' => 1
+  );
+  
+  return $node;
+}
+
+function _pm_node_access($nid)
+{
+  global $user;
+  $node = node_load($nid);
+  
+  if ($node->uid == $user->uid) {
+    return true;
+  }
+  
+  return user_access('edit markets');
+}
+
+function _pm_add_contract()
+{
+  include_once 'modules/node/node.pages.inc';
+  $form_state = array('storage' => NULL, 'submitted' => FALSE);
+  $form_build_id = $_POST['form_build_id'];
+  // Get the form from the cache.
+  $form = form_get_cache($form_build_id, $form_state);
+  $args = $form['#parameters'];
+  $form_id = array_shift($args);
+  // We will run some of the submit handlers so we need to disable redirecting.
+  $form['#redirect'] = FALSE;
+  // We need to process the form, prepare for that by setting a few internals
+  // variables.
+  $form['#post'] = $_POST;
+  $form['#programmed'] = FALSE;
+  $form_state['post'] = $_POST;
+  //$output = dpr($form_state, true);  
+  // Build, validate and if possible, submit the form.
+  drupal_process_form($form_id, $form, $form_state);
+
+  // This call recreates the form relying solely on the form_state that the
+  // drupal_process_form set up.
+  $form = drupal_rebuild_form($form_id, $form_state, $args, $form_build_id);
+  
+  // Render the new output.
+  $contract_form = $form['pm_contracts_wrapper']['pm_contracts'];
+  unset($contract_form['#prefix'], $contract_form['#suffix']); // Prevent duplicate wrappers.
+  $output .= theme('status_messages') . drupal_render($contract_form);
+
+  drupal_json(array('status' => TRUE, 'data' => $output));
+}
+
+function pm_add_contract_submit($form, &$form_state) {
+  // Set the form to rebuild and run submit handlers.
+  node_form_submit_build_node($form, $form_state);
+  if ($c = $form_state['values']['pm_new_contract']) {
+    $tmp = array('cid' => 0, 'title' => $c);
+    $form_state['new_contract'] = $tmp;
+  }
+}
+
+function _pm_buy($cid)
+{
+  
+}
+
+function _pm_sell($cid)
+{
+  
+}
+
+function _pm_get_node_from_cid($cid)
+{
+  $nid = db_result(db_query("SELECT nid FROM {pm_contract} WHERE cid = %d", $cid));
+  return node_load($nid);
+}
+
+function theme_pm_contract_list($form)
+{
+  $rows = array();
+    
+  foreach (element_children($form) as $key) {
+  //dpm($key);
+    // No need to print the field title every time.
+    //unset($form[$key]['chtext']['#title'], $form[$key]['chvotes']['#title']);
+    $title = $form[$key]['title']['#title'];
+    unset($form[$key]['title']['#title']);
+    // Build the table row.
+    $row = array(
+      'data' => array(
+        array('data' => $title),
+        array('data' => drupal_render($form[$key])),
+      ),
+    );
+
+    // Add additional attributes to the row, such as a class for this row.
+    if (isset($form[$key]['#attributes'])) {
+      $row = array_merge($row, $form[$key]['#attributes']);
+    }
+    $rows[] = $row;
+  }
+
+  $output = theme('table', $headers, $rows);
+ // $output .= drupal_render($form);
+  return $output;
+}
+
+function theme_pm_contracts($contracts)
+{
+  $output = '<ul class="pm-contracts">';
+  foreach ($contracts as $c) {
+    $output .= '<li>' . $c['title'] . '</li>';
+  }
+  $output .= '</ul>';
+
+  return theme('box', t('Contracts'), $output);
+}
+
