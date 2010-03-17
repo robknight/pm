@@ -1,6 +1,14 @@
 TODO
 ----
 
+Next actions
+------------
+
+* Implement theme_block_holdings()
+
+Future tasks
+------------
+
 * Proper error handling
 * Integration with userpoints module
 * Tidy up the user interface in the default theme templates

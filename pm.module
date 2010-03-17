@@ -114,15 +114,18 @@ function pm_block_holdings()
 {
   global $user;
   
-  if ($user->uid) {
-    $content = theme('pm_block_holdings', $user, $market);
-  } else {
-    return array();
+  if ($user->uid && arg(0) == 'node' && is_numeric(arg(1))) {
+    $market = node_load(arg(1));
+    
+    if ($market->type == 'pm') {
+      $content = theme('pm_block_holdings', user_load($user->uid), $market); 
+      $result = array('title' => t('My portfolio'), 'content' => $content);
+      
+      return $result;
+    }
   }
   
-  $result = array('title' => t('My portfolio'), 'content' => $content);
-  
-  return $result;
+  return array();
 }
 
 /**

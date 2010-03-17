@@ -48,3 +48,8 @@ function theme_pm_block_user($user)
 {
   return "Balance: {$user->balance}";
 }
+
+function theme_pm_block_holdings($user, $market)
+{
+
+}
