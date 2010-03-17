@@ -1,15 +1,24 @@
 <?php
 
+define('PM_MSR_CONSTANT', 100);
+define('PM_PRICE_TOO_LOW', 1);
+define('PM_INSUFFICIENT_FUNDS', 2);
+define('PM_PRICE_TOO_HIGH', 3);
+define('PM_INSUFFICIENT_PORTFOLIO', 4);
+
+
 /**
+ * Implementation of hook_perm()
  * @return array An array of permissions
  */
 function pm_perm()
 {
   return array('create markets', 'edit markets', 'delete markets', 'edit own markets', 'delete own markets',
-               'resolve markets', 'resolve own markets');
+               'resolve markets', 'resolve own markets', 'trade in markets');
 }
 
 /**
+ * Implementation of hook_node_info()
  * @return array Information about the node type(s) supported by this module
  */
 function pm_node_info()
@@ -23,18 +32,115 @@ function pm_node_info()
   );
 }
 
+/**
+ * Implementation of hook_theme()
+ */
 function pm_theme()
 {
   return array(
     'pm_contract_list' => array(
       'arguments' => array('form' => NULL),
+      'file' => 'pm.theme.inc'
     ),
     'pm_contracts' => array(
-      'arguments' => array('contracts' => NULL)
+      'arguments' => array('contracts' => NULL),
+      'file' => 'pm.theme.inc'
+    ),
+    'pm_block_user' => array(
+      'arguments' => array('user'),
+      'file' => 'pm.theme.inc'
+    ),
+    'pm_block_holdings' => array(
+      'arguments' => array('user', 'market'),
+      'file' => 'pm.theme.inc'
     )
   );
 }
 
+/**
+ * Implementation of hook_exit()
+ */
+function pm_exit($destination = null)
+{
+  //db_unlock_tables();
+}
+
+/**
+ * Implementation of hook_block()
+ */
+function pm_block($op = 'list', $delta = 0)
+{
+  if ($op == 'list') {
+    return array(
+      'user' => array(
+        'info' => t('PM account info')
+      ),
+      'holdings' => array(
+        'info' => t('Market context')
+      )
+    );
+  } else if ($op == 'view') {
+    switch($delta) {
+      case 'user':
+        return pm_block_user();
+      case 'holdings':
+        return pm_block_holdings();
+    }
+  }
+}
+
+/**
+ * Render information about the user's account
+ */
+function pm_block_user()
+{
+  global $user;
+  
+  if ($user->uid) {
+    $content = theme('pm_block_user', user_load($user->uid));
+  } else {
+    return array();
+  }
+  
+  $result = array('title' => t('My market account'), 'content' => $content);
+
+  return $result;
+}
+
+/**
+ * Render information about the user's portfolio
+ */
+function pm_block_holdings()
+{
+  global $user;
+  
+  if ($user->uid) {
+    $content = theme('pm_block_holdings', $user, $market);
+  } else {
+    return array();
+  }
+  
+  $result = array('title' => t('My portfolio'), 'content' => $content);
+  
+  return $result;
+}
+
+/**
+ * Implementation of hook_user
+ */
+function pm_user($op, &$edit, &$account, $category = null)
+{
+  if ($op == 'load') {
+    $acc = _pm_load_account($account->uid);
+    $account->balance = $acc['balance'];
+    $account->portfolio = $acc['portfolio'];
+   // var_dump($account);
+  }
+}
+
+/**
+ * Implementation of hook_access
+ */
 function pm_access($op, $node, $account)
 {
   switch ($op) {
@@ -58,6 +164,9 @@ function pm_access($op, $node, $account)
   return false;
 }
 
+/**
+ * Implementation of hook_form
+ */
 function pm_form(&$node, $form_state) {
   $type = node_get_types('type', $node);
 
@@ -84,11 +193,7 @@ function pm_form(&$node, $form_state) {
   );
   
   $form['pm_contracts_wrapper'] = array(
-    //'#type' => 'fieldset',
-    //'#title' => t('Contracts'),
     '#weight' => 5,
-    //'#collapsible' => TRUE,
-  //  '#collapsed' => FALSE,
     '#tree' => false
   );
   
@@ -107,8 +212,6 @@ function pm_form(&$node, $form_state) {
     }
     $node->pm_contracts = array_merge($node->pm_contracts, array($form_state['new_contract']));
   }
-  
-  //$form['pm_contracts_wrapper']['pm_contracts']['#suffix'] = dpr($node->pm_contracts, true);
   
   $i = 1;
   foreach ($node->pm_contracts as $c) {
@@ -147,23 +250,29 @@ function pm_form(&$node, $form_state) {
   return $form;
 }
 
+/**
+ * Implementation of hook_insert()
+ */
 function pm_insert($node)
 {
   db_query("INSERT INTO {pm_market} (nid, status) VALUES (%d, %d)", $node->nid, $node->pm_status);
   $nid = db_last_insert_id();
   
-  _pm_calculate_prices($node->pm_contracts);
+  _pm_update_prices($node->pm_contracts);
   
   foreach ($node->pm_contracts as $c) {
     _pm_save_contract($nid, $c);
   }
 }
 
+/**
+ * Implementation of hook_update()
+ */
 function pm_update($node)
 {
   db_query("UPDATE {pm_market} SET status = %d WHERE nid = %d", $node->pm_status, $node->nid);
   
-  _pm_calculate_prices($node->pm_contracts);
+  _pm_update_prices($node->pm_contracts);
   
   foreach ($node->pm_contracts as $c) {
     _pm_save_contract($node->nid, $c);
@@ -175,22 +284,51 @@ function _pm_save_contract($nid, $contract)
   if ($contract['cid'] == 0) {
     db_query("INSERT INTO {pm_contract} (nid, title, quantity, price) VALUES (%d, '%s', 0, 0)", $nid, $contract['title']);
   } else {
-    db_query("UPDATE {pm_contract} SET title = '%s', quantity = %d, price = %d WHERE cid = %d",
-             $contract['title'], $contract['quantity'], $contract['price'], $contract['cid']);
+    db_query("UPDATE {pm_contract} SET title = '%s', price = %f, quantity = %d WHERE cid = %d",
+             $contract['title'], $contract['price'], $contract['quantity'], $contract['cid']);
   }
 }
 
-function _pm_calculate_prices(&$contracts)
-{
-
+function _pm_save_account($account) {
+  db_query("REPLACE INTO {pm_account} (uid, balance) VALUES(%d, %f)", $account['uid'], $account['balance']);
+  
+  foreach ($account['portfolio'] as $cid => $portfolio) {
+    db_query("REPLACE INTO {pm_portfolio} (uid, cid, quantity) VALUES (%d, %d, %d)",
+             $account['uid'], $cid, $portfolio['quantity']);
+  }
 }
 
+function _pm_update_prices(&$contracts)
+{
+  $sp = _pm_sum_powers($contracts);
+  
+  foreach ($contracts as $key => $contract) {
+    $contracts[$key]['price'] = (exp($contracts[$key]['quantity'] / PM_MSR_CONSTANT) / $sp);
+  }
+}
+
+function _pm_sum_powers(&$contracts)
+{
+  $result = 0;
+  foreach ($contracts as $c) {
+    $result += exp($c['quantity'] / PM_MSR_CONSTANT);
+  }
+  
+  return $result;
+}
+
+/**
+ * Implementation of hook_delete()
+ */
 function pm_delete($node)
 {
   db_query("DELETE FROM {pm_contract} WHERE nid = %d", $node->nid);
   db_query("DELETE FROM {pm_market} WHERE nid = %d", $node->nid);
 }
 
+/**
+ * Implementation of hook_validate()
+ */
 function pm_validate(&$node)
 {
   if (!in_array($node->pm_status, array(0, 1, 2))) {
@@ -198,12 +336,15 @@ function pm_validate(&$node)
   }
 }
 
+/**
+ * Implementation of hook_load()
+ */
 function pm_load($node)
 {
   $ret = db_fetch_object(db_query("SELECT status AS pm_status FROM {pm_market} WHERE nid = '%d'", $node->nid));
   $ret->pm_contracts = array();
   
-  $q = db_query("SELECT cid, quantity, price, title FROM {pm_contract} WHERE nid = %d", $node->nid);
+  $q = db_query("SELECT cid, nid, quantity, price, title FROM {pm_contract} WHERE nid = %d", $node->nid);
   while ($r = db_fetch_array($q)) {
     $ret->pm_contracts[] = $r;
   }
@@ -211,30 +352,77 @@ function pm_load($node)
   return $ret;
 }
 
+/**
+ * Implementation of hook_menu()
+ */
 function pm_menu()
 {
+  global $user;
+  
   $items['pm/%/add-contract'] = array(
     'page callback' => '_pm_add_contract',
     'access callback' => '_pm_node_access',
     'access arguments' => array(1),
     'type' => MENU_CALLBACK,
+    'file' => 'pm.pages.inc',
+    'file path' => drupal_get_path('module', 'pm')
   );
   
-  $items['pm/buy/%'] = array(
+  $items['pm/buy/%/%'] = array(
     'page callback' => '_pm_buy',
     'access arguments' => array('access content'),
-    'type' => MENU_CALLBACK
+    'page arguments' => array(2,3),
+    'type' => MENU_CALLBACK,
+    'file' => 'pm.pages.inc',
+    'file path' => drupal_get_path('module', 'pm')
   );
   
-  $items['pm/sell/%'] = array(
+  $items['pm/sell/%/%'] = array(
     'page callback' => '_pm_sell',
     'access arguments' => array('access content'),
-    'type' => MENU_CALLBACK
+    'page arguments' => array(2,3),
+    'type' => MENU_CALLBACK,
+    'file' => 'pm.pages.inc',
+    'file path' => drupal_get_path('module', 'pm')
   );
+  
+  $items['pm/trade'] = array(
+    'page callback' => '_pm_trade',
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+    'file' => 'pm.pages.inc',
+    'file path' => drupal_get_path('module', 'pm')
+  );
+  
+  $items['user/%user/pm'] = array(
+    'page callback' => '_pm_user_page',
+    'page arguments' => array(1),
+    'access callback' => 'user_edit_access',
+    'access arguments' => array(1),
+    'type' => MENU_LOCAL_TASK,
+    'file' => 'pm.pages.inc',
+    'file path' => drupal_get_path('module', 'pm'),
+    'title' => 'Prediction Market'
+  );
+  
+  $items['user/%user/pm/history'] = array(
+    'page callback' => '_pm_user_page',
+    'page arguments' => array(1),
+    'access callback' => 'user_edit_access',
+    'access arguments' => array(1),
+    'type' => MENU_LOCAL_TASK,
+    'file' => 'pm.pages.inc',
+    'file path' => drupal_get_path('module', 'pm'),
+    'title' => 'My Market History'
+  );  
+
 
   return $items;
 }
 
+/**
+ * Implementation of hook_view()
+ */
 function pm_view($node, $teaser = false, $page = false)
 {
   $node = node_prepare($node, $teaser);
@@ -259,55 +447,136 @@ function _pm_node_access($nid)
   return user_access('edit markets');
 }
 
-function _pm_add_contract()
+function _pm_fail($reason, $destination = '')
 {
-  include_once 'modules/node/node.pages.inc';
-  $form_state = array('storage' => NULL, 'submitted' => FALSE);
-  $form_build_id = $_POST['form_build_id'];
-  // Get the form from the cache.
-  $form = form_get_cache($form_build_id, $form_state);
-  $args = $form['#parameters'];
-  $form_id = array_shift($args);
-  // We will run some of the submit handlers so we need to disable redirecting.
-  $form['#redirect'] = FALSE;
-  // We need to process the form, prepare for that by setting a few internals
-  // variables.
-  $form['#post'] = $_POST;
-  $form['#programmed'] = FALSE;
-  $form_state['post'] = $_POST;
-  //$output = dpr($form_state, true);  
-  // Build, validate and if possible, submit the form.
-  drupal_process_form($form_id, $form, $form_state);
-
-  // This call recreates the form relying solely on the form_state that the
-  // drupal_process_form set up.
-  $form = drupal_rebuild_form($form_id, $form_state, $args, $form_build_id);
-  
-  // Render the new output.
-  $contract_form = $form['pm_contracts_wrapper']['pm_contracts'];
-  unset($contract_form['#prefix'], $contract_form['#suffix']); // Prevent duplicate wrappers.
-  $output .= theme('status_messages') . drupal_render($contract_form);
-
-  drupal_json(array('status' => TRUE, 'data' => $output));
+  drupal_set_message(_pm_fail_message($reason));
+  drupal_goto($destination);
 }
 
-function pm_add_contract_submit($form, &$form_state) {
-  // Set the form to rebuild and run submit handlers.
-  node_form_submit_build_node($form, $form_state);
-  if ($c = $form_state['values']['pm_new_contract']) {
-    $tmp = array('cid' => 0, 'title' => $c);
-    $form_state['new_contract'] = $tmp;
+function _pm_fail_message($reason)
+{
+  switch($reason) {
+    case PM_INSUFFICIENT_FUNDS:
+      return t('Insufficient funds');
+    case PM_INSUFFICIENT_PORTFOLIO:
+      return t('Insufficient portfolio');
+    case PM_PRICE_TOO_HIGH:
+      return t('Price too high');
+    case PM_PRICE_TOO_LOW:
+      return t('Price too low');
   }
 }
 
-function _pm_buy($cid)
+function _pm_quantity_to_buy($contracts, $cid, $max_quantity, $max_price, $balance)
 {
   
+  $qfp = floor(_pm_quantity_for_price($contracts, $cid, $max_price));
+  
+  if ($qfp < $max_quantity) {
+    $max_quantity = $qfp;
+  }
+  
+  $cost = _pm_calculate_cost($contracts, $cid, $max_quantity);
+
+  if ($cost > $balance) {
+    $max_quantity = floor(_pm_quantity_for_sum($contracts, $cid, $balance));
+  }
+    
+  return $max_quantity;
 }
 
-function _pm_sell($cid)
+function _pm_quantity_to_sell($contracts, $cid, $max_quantity, $min_price, $portfolio)
 {
+  if ($portfolio['quantity'] < $max_quantity) {
+    $max_quantity = $portfolio['quantity'];
+  }
   
+  $quantity = 0 - floor(_pm_quantity_for_price($contracts, $cid, $min_price));
+  
+  return floor(min($quantity, $max_quantity));
+}
+
+function _pm_quantity_for_sum($contracts, $cid, $sum)
+{
+  $old_price = _pm_calculate_price($contracts, $cid, 0);
+  
+  $n = exp(($old_price + $sum) / PM_MSR_CONSTANT);
+  
+  foreach ($contracts as $id => $c) {
+    if ($id != $cid) {
+      $n -= exp($c['quantity'] / PM_MSR_CONSTANT);
+    }
+  }
+  
+  return (PM_MSR_CONSTANT * log($n)) - $contracts[$cid]['quantity'];
+}
+
+function _pm_quantity_for_price($contracts, $cid, $price)
+{
+  $prob = $price; //$contracts[$cid]['price'];
+  
+  $others = 0;
+  
+  foreach ($contracts as $id => $c) {
+    if ($id != $cid) {
+      $others += $prob * exp($c['quantity'] / PM_MSR_CONSTANT);
+    }
+  }
+  
+  $qty = log($others / (1 - $prob)) * PM_MSR_CONSTANT;
+  
+  return $qty - $contracts[$cid]['quantity'];
+}
+
+function _pm_contract_set_from_cid($cid)
+{
+  $ret = array();
+  
+  // We can't do this as a subselect due to an apparent bug in MySQL
+  // http://bugs.mysql.com/bug.php?id=25180
+  $nid = db_result(db_query("SELECT nid FROM {pm_contract} WHERE cid = %d", $cid));
+  
+  $q = db_query("SELECT cid, nid, quantity, price, title FROM {pm_contract}
+                WHERE nid = %d", $nid);
+  while ($r = db_fetch_array($q)) {
+    $ret[$r['cid']] = $r;
+  }
+  
+  return $ret;
+}
+
+function _pm_lock_tables($tables)
+{
+  foreach ($tables as $table => $type) {
+    $table_strings[] = '{' . db_escape_table($table) . "} {$type}";
+  }
+  
+  $sql = 'LOCK TABLES ' . implode(', ', $table_strings);
+ // var_dump($sql);
+  
+  db_query($sql);
+}
+
+
+function _pm_calculate_cost($contracts, $cid, $quantity)
+{
+  return (_pm_calculate_price($contracts, $cid, $quantity) - _pm_calculate_price($contracts, $cid, 0));
+}
+
+function _pm_calculate_price($contracts, $cid, $quantity)
+{
+  $contracts = array_values($contracts);
+  $key = null;
+  foreach ($contracts as $k => $c) {
+    if ($c['cid'] == $cid) {
+      $key = $k;
+      $contracts[$k]['quantity'] += $quantity;
+    }
+  }
+ 
+  $sp = _pm_sum_powers($contracts);
+  
+  return log($sp) * PM_MSR_CONSTANT;
 }
 
 function _pm_get_node_from_cid($cid)
@@ -316,44 +585,134 @@ function _pm_get_node_from_cid($cid)
   return node_load($nid);
 }
 
-function theme_pm_contract_list($form)
+function _pm_load_account($uid)
 {
-  $rows = array();
-    
-  foreach (element_children($form) as $key) {
-  //dpm($key);
-    // No need to print the field title every time.
-    //unset($form[$key]['chtext']['#title'], $form[$key]['chvotes']['#title']);
-    $title = $form[$key]['title']['#title'];
-    unset($form[$key]['title']['#title']);
-    // Build the table row.
-    $row = array(
-      'data' => array(
-        array('data' => $title),
-        array('data' => drupal_render($form[$key])),
-      ),
-    );
-
-    // Add additional attributes to the row, such as a class for this row.
-    if (isset($form[$key]['#attributes'])) {
-      $row = array_merge($row, $form[$key]['#attributes']);
-    }
-    $rows[] = $row;
+  $account = db_fetch_array(db_query("SELECT * FROM {pm_account} WHERE uid = %d", $uid));
+  if (!$account) {
+    return array('balance' => 10000, 'portfolio' => array(), 'uid' => $uid);
   }
+  
+  $account['portfolio'] = array();
 
-  $output = theme('table', $headers, $rows);
- // $output .= drupal_render($form);
-  return $output;
+  $q = db_query("SELECT * FROM {pm_portfolio} WHERE uid = %d", $uid);  
+  while ($p = db_fetch_array($q)) {
+    $account['portfolio'][$p['cid']] = $p;
+  }
+  
+  return $account;
 }
 
-function theme_pm_contracts($contracts)
+function _pm_load_current_account()
 {
-  $output = '<ul class="pm-contracts">';
-  foreach ($contracts as $c) {
-    $output .= '<li>' . $c['title'] . '</li>';
-  }
-  $output .= '</ul>';
+  global $user;
+  $account = _pm_load_account($user->uid);
 
-  return theme('box', t('Contracts'), $output);
+  
+  return $account;
 }
 
+function _pm_get_portfolio($account, $cid)
+{
+  $q = db_query('SELECT * FROM {pm_portfolio} WHERE uid = %d AND cid = %d AND quantity > 0', $account['uid'], $cid);
+  
+  return db_fetch_array($q);
+}
+
+function pm_trade_form($form_state, $cid)
+{
+  global $user;
+  
+  if ($user->uid == 0 || !$account = _pm_load_account($user->uid)) {
+  
+    return array();
+  }
+  
+  $pf = _pm_get_portfolio($account, $cid);
+  $options = array('Buy' => 'Buy');
+  
+  if ($pf) {
+    $options['Sell'] = 'Sell';
+  }
+  
+  $form = array();
+  
+  $form['cid'] = array(
+    '#type' => 'hidden',
+    '#value' => $cid
+  );
+  
+  $form['trade'] = array(
+    '#type' => 'select',
+    '#title' => t('Trade'),
+    '#options' => $options
+  );
+  
+  $form['qty'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Limit Quantity'),
+  );
+  
+  $form['price'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Limit Price')
+  );
+  
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Go')
+  );
+  
+  $form['#submit'] = array(
+    'pm_trade_form_submit'
+  );
+  
+  return $form;
+}
+
+function pm_trade_form_submit($form, &$form_state)
+{
+  $values = $form_state['values'];
+  
+  include(drupal_get_path('module', 'pm') . '/pm.pages.inc');
+  
+  if ($values['trade'] == 'Buy') {
+    _pm_buy($values['cid'], $values['qty'], $values['price']);
+  } elseif ($values['trade'] == 'Sell') {
+    _pm_sell($values['cid'], $values['qty'], $values['price']);
+  }
+}
+
+function _pm_save_transaction($type, $cid, $uid, $quantity, $value, $final_price)
+{
+  $timestamp = time();
+  
+  db_query("INSERT INTO {pm_transaction} VALUES(0, %d, %d, '%s', %d, %f, %f, %d)",
+           $cid, $uid, $type, $quantity, $value, $final_price, $timestamp);
+}
+
+function _pm_record_history($time)
+{
+  _pm_lock_tables(array('pm_contract' => 'read', 'pm_history' => 'write'));
+  
+  $q = db_query("SELECT price, cid FROM {pm_contract}");
+  
+  while ($r = db_fetch_array($q)) {
+    db_query("INSERT INTO {pm_history} VALUES (%d, %d, %f)", $time, $r['cid'], $r['price']);
+  }
+  
+  db_unlock_tables();
+}
+
+/**
+ * Implementation of hook_cron()
+ */
+function pm_cron()
+{
+  $t = time();
+  $this_hour = $t - ($t % 3600);
+  
+  if ($this_hour >= variable_get('pm_history_next', 0)) {
+    variable_set('pm_history_next', $this_hour + 3600);
+    _pm_record_history($this_hour);
+  }
+}

@@ -104,6 +104,58 @@ function pm_schema()
     'primary key' => array('uid')
   );
   
+  $schema['pm_transaction'] = array(
+    'description' => t('Transaction history'),
+    'fields' => array(
+      'txid' => array(
+        'description' => t('Transaction ID'),
+        'type' => 'serial',
+        'unsigned' => true,
+        'not null' => true
+      ),
+      'cid' => array(
+        'description' => t('ID of the contract'),
+        'type' => 'int',
+        'unsigned' => true,
+        'not null' => true
+      ),
+      'uid' => array(
+        'description' => t('ID of the user'),
+        'type' => 'int',
+        'unsigned' => true,
+        'not null' => true
+      ),
+      'type' => array(
+        'description' => t('Type of transaction'),
+        'type' => 'varchar',
+        'length' => 10,
+        'not null' => true
+      ),
+      'quantity' => array(
+        'description' => t('Quantity of contracts traded'),
+        'type' => 'int',
+        'unsigned' => true,
+        'not null' => true
+      ),
+      'value' => array(
+        'description' => t('Total value of the trade'),
+        'type' => 'float',
+        'not null' => true
+      ),
+      'final_price' => array(
+        'description' => t('The price of the contract at the end of the transaction'),
+        'type' => 'float',
+        'not null' => true
+      ),
+      'timestamp' => array(
+        'description' => t('Time at which the transaction occurred'),
+        'type' => 'int',
+        'not null' => true
+      )
+    ),
+    'primary key' => array('txid')
+  );
+  
   return $schema;
 }
 
