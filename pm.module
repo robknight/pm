@@ -1,4 +1,5 @@
 <?php
+// $Id$ 
 
 define('PM_MSR_CONSTANT', 100);
 define('PM_PRICE_TOO_LOW', 1);

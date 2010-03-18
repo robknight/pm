@@ -1,5 +1,5 @@
 <?php
-
+// $Id$ 
 
 function _pm_add_contract()
 {

@@ -3,6 +3,3 @@ name = "Prediction Market"
 description = "Implementation of a prediction market with market maker"
 package = "Prediction Market"
 core = 6.x
-project = "pm"
-project status url = "http://features.robknight.org.uk/fserver"
-version = "6.x-1.0"
