@@ -117,8 +117,9 @@ function pm_block_holdings()
   
   if ($user->uid && arg(0) == 'node' && is_numeric(arg(1))) {
     $market = node_load(arg(1));
-    
-    if ($market->type == 'pm') {
+
+    if ($market->type == 'pm_market') {
+      
       $content = theme('pm_block_holdings', user_load($user->uid), $market); 
       $result = array('title' => t('My portfolio'), 'content' => $content);
       
@@ -350,7 +351,7 @@ function pm_load($node)
   
   $q = db_query("SELECT cid, nid, quantity, price, title FROM {pm_contract} WHERE nid = %d", $node->nid);
   while ($r = db_fetch_array($q)) {
-    $ret->pm_contracts[] = $r;
+    $ret->pm_contracts[$r['cid']] = $r;
   }
   
   return $ret;

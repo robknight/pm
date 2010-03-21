@@ -6,11 +6,15 @@ TODO
 Next actions
 ------------
 
-* Implement theme_block_holdings()
+* Improved error/failure reporting
 
 Future tasks
 ------------
 
+* Additional workflow steps, e.g. market closing and opening
+* Leaderboard page
+* User transaction history
+* Graphs and historical views of markets
 * Proper error handling
 * Integration with userpoints module
 * Tidy up the user interface in the default theme templates
